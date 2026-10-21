@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const QRCode = require('qrcode');
 
 const PORT = process.env.PORT || 3000;
 const BASE = __dirname;
@@ -20,7 +21,7 @@ const storeFile = path.join(DATA, 'store.json');
 try { store = Object.assign(store, JSON.parse(fs.readFileSync(storeFile, 'utf8'))); } catch {}
 function saveStore() { try { fs.writeFileSync(storeFile, JSON.stringify(store, null, 2)); } catch {} }
 
-let sock = null, connected = false, lastCode = null, lastCodeAt = 0, connecting = false, wsOpen = false;
+let sock = null, connected = false, lastCode = null, lastCodeAt = 0, connecting = false, wsOpen = false, lastQr = null, lastQrAt = 0;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const norm = t => (t || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 function findProduct(text) {
@@ -120,11 +121,12 @@ async function startSock() {
   const { version } = await fetchLatestBaileysVersion();
   sock = makeWASocket({ version, auth: state, printQRInTerminal: false, browser: ['Personal Bot', 'Chrome', '1.0'] });
   sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    if (qr) { lastQr = qr; lastQrAt = Date.now(); }
     if (connection === 'connecting' || connection === 'open') wsOpen = true;
-    if (connection === 'open') { connected = true; connecting = false; console.log('WhatsApp CONNECTED'); }
+    if (connection === 'open') { connected = true; connecting = false; lastQr = null; console.log('WhatsApp CONNECTED'); }
     if (connection === 'close') {
-      connected = false; connecting = false; wsOpen = false;
+      connected = false; connecting = false; wsOpen = false; lastQr = null;
       // Drop the dead socket so the next attempt never reuses it (and never
       // runs two sockets on the same auth at once).
       try { sock.ws?.close(); } catch {}
@@ -191,6 +193,12 @@ table{width:100%;font-size:13px;border-collapse:collapse}td,th{border-bottom:1px
 <p><b>Step 2:</b> Phone e WhatsApp khulo → <b>⋮ → Linked Devices → Link a Device → Link with phone number</b> → uporer code ta boshain. Code taratari boshate hobe, na hole abar Get Code chapo.</p>
 <p><b>Step 3:</b> Status <b>✅ Connected</b> holei hoye geche. Tarpor jekono number theke message ashle bot nije bujhe reply dibe.</p>
 <p style="font-size:13px;color:#92400e">Note: Code kauke dio na, shudhu nijer phone e boshio. Code expire hole notun code nao.</p></div>
+<div class="card"><h3>📷 QR diye connect (number lagbe na)</h3>
+<p>Code e jodi bar bar fail hoy, tahole QR scan koro — ete number milanor jhamela nai, je phone diye scan korba oi phone er WhatsApp-i link hobe.</p>
+<button onclick="loadQr()">QR dekhan</button>
+<div id="qrBox"></div>
+<p><b>Step:</b> WhatsApp khulo → <b>⋮ → Linked Devices → Link a Device</b> → camera diye ei QR ta scan koro. QR expire hole abar <b>QR dekhan</b> chapo.</p>
+<p style="font-size:13px;color:#92400e">Age code chapba na — age QR try koro, karon code nile QR bondho hoye jete pare.</p></div>
 <div class="card"><h3>🧾 Orders</h3><div id="orders"></div></div>
 <div class="card"><h3>💬 Recent Chats (shob ID theke)</h3><div id="chats"></div></div>
 </div><script>
@@ -201,6 +209,7 @@ let r=await fetch('/api/pair',{method:'POST',headers:{'Content-Type':'applicatio
 if(j.already){document.getElementById('codeBox').innerHTML='<p>✅ Agei connected ache, code lagbe na.</p>';}
 else if(j.code){document.getElementById('codeBox').innerHTML='<div class="code">'+j.code+'</div><p style="text-align:center">Ei code ta phone er Linked Devices e boshain — taratari!</p>';}
 else{document.getElementById('codeBox').innerHTML='<p>❌ '+(j.error||'Code ashe nai, abar try korun')+'</p>';} st();}
+async function loadQr(){let b=document.getElementById('qrBox');b.innerHTML='QR ana hocche...';let r=await fetch('/api/qr');let j=await r.json();if(j.connected){b.innerHTML='<p>✅ Agei connected ache.</p>';}else if(j.qr){b.innerHTML='<img src="'+j.qr+'" style="width:260px;height:260px">';}else{b.innerHTML='<p>❌ QR ashe nai, abar chapo.</p>';}}
 async function load(){let o=await(await fetch('/api/orders')).json();document.getElementById('orders').innerHTML=o.length?'<table><tr><th>ID</th><th>Product</th><th>Total</th><th>Name</th></tr>'+o.map(x=>'<tr><td>'+x.id+'</td><td>'+x.product+'</td><td>'+x.price+'</td><td>'+(x.name||'')+'</td></tr>').join('')+'</table>':'Ekhono order nai';
 let c=await(await fetch('/api/chats')).json();document.getElementById('chats').innerHTML=c.length?c.slice(-20).map(x=>'<p><b>'+x.sender+'</b> ('+x.role+'): '+x.text+'</p>').join(''):'Ekhono chat nai';}
 st();load();setInterval(()=>{st();load();},8000);
@@ -212,6 +221,12 @@ const server = http.createServer(async (req, res) => {
   const body = () => new Promise(r => { let d = ''; req.on('data', c => d += c); req.on('end', () => { try { r(JSON.parse(d || '{}')); } catch { r({}); } }); });
   if (req.method === 'GET' && url.pathname === '/') return send(200, DASH, 'text/html; charset=utf-8');
   if (req.method === 'GET' && url.pathname === '/api/status') return send(200, { connected, code: lastCode && Date.now() - lastCodeAt < 60000 ? lastCode : null });
+  if (req.method === 'GET' && url.pathname === '/api/qr') {
+    if (connected) return send(200, { connected: true });
+    if (!lastQr) { if (!sock && !connecting) startSock().catch(()=>{}); return send(200, { qr: null }); }
+    try { const img = await QRCode.toDataURL(lastQr); return send(200, { qr: img }); }
+    catch (e) { return send(500, { error: 'QR banano jay nai' }); }
+  }
   if (req.method === 'GET' && url.pathname === '/api/orders') return send(200, store.orders.slice(-50));
   if (req.method === 'GET' && url.pathname === '/api/chats') return send(200, store.chats.slice(-100));
   if (req.method === 'POST' && url.pathname === '/api/pair') {
