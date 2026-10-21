@@ -1,0 +1,1 @@
+{"dependencies":{"@whiskeysockets/baileys":"^6.7.0"},"description":"Personal WhatsApp number automation via pairing code (Linked Devices) - free, no Meta app needed","engines":{"node":">=18"},"main":"index.js","name":"whatsapp-personal-pairing-bot","scripts":{"start":"node index.js"},"version":"1.0.0"}
