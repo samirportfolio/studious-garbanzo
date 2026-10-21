@@ -133,7 +133,15 @@ async function startSock() {
       if (sock) sock = null;
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
       console.log('WhatsApp closed, loggedOut=', loggedOut);
-      if (!loggedOut) setTimeout(startSock, 3000);
+      // loggedOut=true after a Connection Failure means the saved session is
+      // invalid. Keeping it makes every next attempt fail the same way, so
+      // wipe ONLY the auth folder (orders/chats in data/ stay untouched) and
+      // restart with a completely fresh session. This is the fix for the
+      // repeated connect -> login -> Connection Failure -> closed loop.
+      if (loggedOut) {
+        try { fs.rmSync(path.join(BASE, 'auth'), { recursive: true, force: true }); console.log('auth cleared after logout'); } catch (e) { console.log('auth clear error', e.message); }
+      }
+      setTimeout(startSock, 3000);
     }
   });
   sock.ev.on('messages.upsert', async ({ messages }) => {
@@ -189,6 +197,7 @@ table{width:100%;font-size:13px;border-collapse:collapse}td,th{border-bottom:1px
 <p><b>Step 1:</b> Niche tomar WhatsApp Business number ta din (jemon: 017XXXXXXXX) ar <b>Get Code</b> chapo.</p>
 <input id="num" placeholder="WhatsApp number: 017XXXXXXXX">
 <button onclick="pair()">Get Pairing Code</button>
+<button onclick="resetBot()" style="background:#64748b">Reset — QR/code na ashle</button>
 <div id="codeBox"></div>
 <p><b>Step 2:</b> Phone e WhatsApp khulo → <b>⋮ → Linked Devices → Link a Device → Link with phone number</b> → uporer code ta boshain. Code taratari boshate hobe, na hole abar Get Code chapo.</p>
 <p><b>Step 3:</b> Status <b>✅ Connected</b> holei hoye geche. Tarpor jekono number theke message ashle bot nije bujhe reply dibe.</p>
@@ -209,6 +218,7 @@ let r=await fetch('/api/pair',{method:'POST',headers:{'Content-Type':'applicatio
 if(j.already){document.getElementById('codeBox').innerHTML='<p>✅ Agei connected ache, code lagbe na.</p>';}
 else if(j.code){document.getElementById('codeBox').innerHTML='<div class="code">'+j.code+'</div><p style="text-align:center">Ei code ta phone er Linked Devices e boshain — taratari!</p>';}
 else{document.getElementById('codeBox').innerHTML='<p>❌ '+(j.error||'Code ashe nai, abar try korun')+'</p>';} st();}
+async function resetBot(){let b=document.getElementById('codeBox');b.innerHTML='Reset hocche, notun session asche...';await fetch('/api/reset',{method:'POST'});setTimeout(()=>{b.innerHTML='<p>✅ Reset hoye geche. Ekhon notun code ba QR nao.</p>';st();},3000);}
 async function loadQr(){let b=document.getElementById('qrBox');b.innerHTML='QR ana hocche...';let r=await fetch('/api/qr');let j=await r.json();if(j.connected){b.innerHTML='<p>✅ Agei connected ache.</p>';}else if(j.qr){b.innerHTML='<img src="'+j.qr+'" style="width:260px;height:260px">';}else{b.innerHTML='<p>❌ QR ashe nai, abar chapo.</p>';}}
 async function load(){let o=await(await fetch('/api/orders')).json();document.getElementById('orders').innerHTML=o.length?'<table><tr><th>ID</th><th>Product</th><th>Total</th><th>Name</th></tr>'+o.map(x=>'<tr><td>'+x.id+'</td><td>'+x.product+'</td><td>'+x.price+'</td><td>'+(x.name||'')+'</td></tr>').join('')+'</table>':'Ekhono order nai';
 let c=await(await fetch('/api/chats')).json();document.getElementById('chats').innerHTML=c.length?c.slice(-20).map(x=>'<p><b>'+x.sender+'</b> ('+x.role+'): '+x.text+'</p>').join(''):'Ekhono chat nai';}
@@ -226,6 +236,13 @@ const server = http.createServer(async (req, res) => {
     if (!lastQr) { if (!sock && !connecting) startSock().catch(()=>{}); return send(200, { qr: null }); }
     try { const img = await QRCode.toDataURL(lastQr); return send(200, { qr: img }); }
     catch (e) { return send(500, { error: 'QR banano jay nai' }); }
+  }
+  if (req.method === 'POST' && url.pathname === '/api/reset') {
+    try { if (sock) { try { sock.ws?.close(); } catch {} sock = null; } } catch {}
+    connected = false; wsOpen = false; lastQr = null; lastCode = null;
+    try { fs.rmSync(path.join(BASE, 'auth'), { recursive: true, force: true }); } catch {}
+    startSock().catch(e => console.log('reset start error', e.message));
+    return send(200, { reset: true });
   }
   if (req.method === 'GET' && url.pathname === '/api/orders') return send(200, store.orders.slice(-50));
   if (req.method === 'GET' && url.pathname === '/api/chats') return send(200, store.chats.slice(-100));
