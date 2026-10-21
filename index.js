@@ -117,8 +117,14 @@ function botReply(sender, raw) {
 
 async function startSock() {
   if (connecting) return; connecting = true;
-  const { state, saveCreds } = await useMultiFileAuthState(path.join(BASE, 'auth'));
-  const { version } = await fetchLatestBaileysVersion();
+  let state, saveCreds, version;
+  try {
+    ({ state, saveCreds } = await useMultiFileAuthState(path.join(BASE, 'auth')));
+    ({ version } = await fetchLatestBaileysVersion());
+  } catch (e) {
+    connecting = false; console.log('startSock setup failed:', e.message);
+    return;
+  }
   sock = makeWASocket({ version, auth: state, printQRInTerminal: false, browser: ['Personal Bot', 'Chrome', '1.0'] });
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
@@ -132,7 +138,7 @@ async function startSock() {
       try { sock.ws?.close(); } catch {}
       if (sock) sock = null;
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
-      console.log('WhatsApp closed, loggedOut=', loggedOut);
+      console.log('WhatsApp closed, loggedOut=', loggedOut, 'err=', lastDisconnect?.error?.message || lastDisconnect?.error);
       // loggedOut=true after a Connection Failure means the saved session is
       // invalid. Keeping it makes every next attempt fail the same way, so
       // wipe ONLY the auth folder (orders/chats in data/ stay untouched) and
