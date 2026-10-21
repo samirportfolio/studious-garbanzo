@@ -132,7 +132,9 @@ async function startSock() {
     for (const m of messages) {
       if (!m.message || m.key.fromMe) continue;
       const jid = m.key.remoteJid || '';
-      if (!jid.endsWith('@s.whatsapp.net')) continue; // individual chats only, skip groups/status
+      // Individual chats only, skip groups/status/broadcast.
+      // Accept BOTH @s.whatsapp.net and @lid (WhatsApp now sends many chats as @lid).
+      if (jid.endsWith('@g.us') || jid.endsWith('@broadcast') || jid.endsWith('@newsletter')) continue;
       const txt = m.message.conversation || m.message.extendedTextMessage?.text || '';
       if (!txt.trim()) continue;
       const ans = botReply(jid, txt);
