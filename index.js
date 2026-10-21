@@ -20,7 +20,8 @@ const storeFile = path.join(DATA, 'store.json');
 try { store = Object.assign(store, JSON.parse(fs.readFileSync(storeFile, 'utf8'))); } catch {}
 function saveStore() { try { fs.writeFileSync(storeFile, JSON.stringify(store, null, 2)); } catch {} }
 
-let sock = null, connected = false, lastCode = null, lastCodeAt = 0, connecting = false;
+let sock = null, connected = false, lastCode = null, lastCodeAt = 0, connecting = false, wsOpen = false;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 const norm = t => (t || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 function findProduct(text) {
   const t = norm(text);
@@ -120,9 +121,14 @@ async function startSock() {
   sock = makeWASocket({ version, auth: state, printQRInTerminal: false, browser: ['Personal Bot', 'Chrome', '1.0'] });
   sock.ev.on('creds.update', saveCreds);
   sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    if (connection === 'connecting' || connection === 'open') wsOpen = true;
     if (connection === 'open') { connected = true; connecting = false; console.log('WhatsApp CONNECTED'); }
     if (connection === 'close') {
-      connected = false; connecting = false;
+      connected = false; connecting = false; wsOpen = false;
+      // Drop the dead socket so the next attempt never reuses it (and never
+      // runs two sockets on the same auth at once).
+      try { sock.ws?.close(); } catch {}
+      if (sock) sock = null;
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
       console.log('WhatsApp closed, loggedOut=', loggedOut);
       if (!loggedOut) setTimeout(startSock, 3000);
@@ -138,7 +144,7 @@ async function startSock() {
       const txt = m.message.conversation || m.message.extendedTextMessage?.text || '';
       if (!txt.trim()) continue;
       const ans = botReply(jid, txt);
-      try { await sock.sendMessage(jid, { text: ans }); } catch (e) { console.log('send error', e.message); }
+      try { if (sock) await sock.sendMessage(jid, { text: ans }); } catch (e) { console.log('send error', e.message); }
     }
   });
 }
@@ -150,11 +156,23 @@ function normalizeNumber(raw) {
 async function getPairingCode(number) {
   if (connected) return { already: true };
   if (!sock) await startSock();
-  // Wait briefly for socket to reach WhatsApp server before asking for a code
-  for (let i = 0; i < 20 && !sock; i++) await new Promise(r => setTimeout(r, 500));
-  const code = await sock.requestPairingCode(number);
-  lastCode = code; lastCodeAt = Date.now();
-  return { code };
+  // Wait for the single socket to actually reach WhatsApp before asking for a
+  // code - asking while it is still starting/closed gives "Connection Closed".
+  for (let i = 0; i < 30 && !(sock && wsOpen); i++) { if (!sock && !connecting) await startSock(); await sleep(500); }
+  try {
+    const code = await sock.requestPairingCode(number);
+    lastCode = code; lastCodeAt = Date.now();
+    return { code };
+  } catch (e) {
+    // Socket died during the request: wait for the auto-restart to produce one
+    // fresh socket (dead one was already cleared), then retry exactly once.
+    console.log('pair first try failed, waiting for fresh socket:', e.message);
+    for (let i = 0; i < 30 && !(sock && wsOpen); i++) { if (!sock && !connecting) await startSock(); await sleep(500); }
+    if (!sock) throw e;
+    const code = await sock.requestPairingCode(number);
+    lastCode = code; lastCodeAt = Date.now();
+    return { code };
+  }
 }
 
 const DASH = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Personal WhatsApp Bot - Pairing</title>
