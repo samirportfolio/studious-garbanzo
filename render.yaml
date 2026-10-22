@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: waha-whatsapp-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: WAHA_API_KEY
+        value: waha-bot-key-change-me
