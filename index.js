@@ -21,7 +21,7 @@ const storeFile = path.join(DATA, 'store.json');
 try { store = Object.assign(store, JSON.parse(fs.readFileSync(storeFile, 'utf8'))); } catch {}
 function saveStore() { try { fs.writeFileSync(storeFile, JSON.stringify(store, null, 2)); } catch {} }
 
-let sock = null, connected = false, lastCode = null, lastCodeAt = 0, connecting = false, wsOpen = false, lastQr = null, lastQrAt = 0;
+let sock = null, connected = false, lastCode = null, lastCodeAt = 0, connecting = false, wsOpen = false, lastQr = null, lastQrAt = 0, restartTimer = null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const norm = t => (t || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
 function findProduct(text) {
@@ -147,11 +147,13 @@ async function startSock() {
       if (loggedOut) {
         try { fs.rmSync(path.join(BASE, 'auth'), { recursive: true, force: true }); console.log('auth cleared after logout'); } catch (e) { console.log('auth clear error', e.message); }
       }
-      setTimeout(startSock, 3000);
+      if (restartTimer) clearTimeout(restartTimer);
+      restartTimer = setTimeout(startSock, 3000);
     }
   });
   sock.ev.on('messages.upsert', async ({ messages }) => {
     for (const m of messages) {
+      console.log('upsert', m.key.remoteJid, 'fromMe=', m.key.fromMe, 'hasMsg=', !!m.message);
       if (!m.message || m.key.fromMe) continue;
       const jid = m.key.remoteJid || '';
       // Individual chats only, skip groups/status/broadcast.
@@ -244,6 +246,7 @@ const server = http.createServer(async (req, res) => {
     catch (e) { return send(500, { error: 'QR banano jay nai' }); }
   }
   if (req.method === 'POST' && url.pathname === '/api/reset') {
+    if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     try { if (sock) { try { sock.ws?.close(); } catch {} sock = null; } } catch {}
     connected = false; wsOpen = false; lastQr = null; lastCode = null;
     try { fs.rmSync(path.join(BASE, 'auth'), { recursive: true, force: true }); } catch {}
