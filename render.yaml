@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: waha-bot-bridge
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
